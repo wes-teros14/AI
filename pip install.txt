@@ -1,0 +1,1 @@
+python -m pip install langchain langchain-google-genai langchain-chroma langchain-groq python-dotenv pypdf docx2txt unstructured-client langchain-community
