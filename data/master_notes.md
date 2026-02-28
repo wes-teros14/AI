@@ -394,7 +394,7 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 
 ## Dropdown / `picklist` values
 
-* Some dropdown lists, like `National ID Card Type`, are **not** `Picklists`.
+* Some dropdown lists, like `National ID Card Type`, are **not** `Picklists`. This can be the reason why you can see the list in `Picklist Center`
 * **Configuration Path:** * Go to `Manage Business Configuration`.
     * Navigate to `HRIS Elements` -> `nationalIdCard`-> `nationalIdCard_XXX` (where `XXX` is the Country Code). 
 * **Technical Note:** These values are governed by the **Country-Specific Data Model** rather than the `Picklist Center`.
