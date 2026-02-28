@@ -14,7 +14,7 @@
 * **Log**: Event records/Minutes. *(e.g., Meeting with client stakeholders)*
 * **Rule**: Policies/Regulations. *(e.g., Badminton court queuing rules)*
 * **Checklist**: Prep/Workshop questions. *(e.g., Design Workshop Question list)*
-* **Discovery**: System behavior findings. *(e.g., `PerPerson` navigation limits)*
+* **Discovery**: System behavior findings. *(e.g., `PerPerson` navigation limits, light bulb moments, gotchas)*
 * **Task**: Actions/Reminders. *(e.g., Fix Streamlit shuffle logic bug)*
 
 ---
@@ -259,6 +259,7 @@ When analyzing a requirement:
 * Metadata Framework: Admin access to `MDF` `OData` API
 
 ---
+
 # `ATO` / `STP` 'CPI' Standard Integration
 
 > **Date:** 2026-02-25
@@ -382,5 +383,32 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 
 * Clock-in/Clock-out coming from external system will be stored in `OData` entity: `ExternalTimeData`.
 * Clock-in/Clock-out coming from `SF` UI will be stored in `OData`entity: `EmployeeTime`
+
+---
+
+# `SuccessFactors` `Employee Central`
+
+> **Date:** 2026-02-28
+> **Tags:** #sap #successfactors #ec
+> **Type:** Discovery
+
+## Dropdown / `picklist` values
+
+* Some dropdown lists, like `National ID Card Type`, are **not** `Picklists`.
+* **Configuration Path:** * Go to `Manage Business Configuration`.
+    * Navigate to `HRIS Elements` -> `nationalIdCard`-> `nationalIdCard_XXX` (where `XXX` is the Country Code). 
+* **Technical Note:** These values are governed by the **Country-Specific Data Model** rather than the `Picklist Center`.
+
+---
+
+# Posting `Foundation Data` from External Syatem going to `SuccessFactors` `Employee Central`
+
+> **Date:** 2026-02-28
+> **Tags:** #sap #successfactors #integration
+> **Type:** Discovery
+
+## `Foundation Object` Names
+
+* Make sure that during the upsert/insert the payload also includes the `defaultValue` and translations.
 
 ---
