@@ -73,6 +73,7 @@
 
 * **Names:** `Learning Management System`, `LMS`
 
+---
 
 # Integration Terminology and Aliases
 
@@ -87,6 +88,32 @@ When troubleshooting or designing integrations, the following terms are fundamen
 * **`Endpoint`:** The specific target object or function.
 * **`URL`:** The absolute text string used to locate the system.
 * **`Address`:** The network location or hostname.
+
+---
+
+# Integration Classification: Standard vs. Custom
+> **Date:** 2026-02-28
+> **Tags:** #sap #architecture #standard #custom #development
+> **Keywords:** Standard, Custom, OOTB, Prepackaged, Bespoke, Z-Object, BADI
+> **Type:** Concept
+
+## **Classification Definitions**
+
+### **1. Standard (Prepackaged / OOTB)**
+* **Definition:** Integration content provided directly by SAP (Out-Of-The-Box).
+* **Behavior:** Usually "Read-Only" or restricted. Modifications are only permitted via official extension points like **`BADI`** or specific **`IMG`** configuration.
+* **Troubleshooting:** Focus on SAP Service Marketplace, Support Portal, and checking if the latest `Content Version` is deployed in `CPI`.
+
+### **2. Custom (Bespoke / Z-Development)**
+* **Definition:** Integration content built from scratch by the project team.
+* **Behavior:** Fully flexible and fully owned by the consultant. Includes custom `Groovy` scripts, complex `XSLT`, and unique routing logic.
+* **Troubleshooting:** Focus on internal `CPI` message logs, trace mode, and debugging the specific logic mapping.
+
+## **Decision Logic**
+When analyzing a requirement:
+1. Always check if a **Standard** content exists first to minimize maintenance.
+2. Only move to **Custom** development if the requirement cannot be met via **Standard** configuration or **BADI** extensions.
+
 
 ---
 
@@ -168,7 +195,7 @@ When troubleshooting or designing integrations, the following terms are fundamen
 
 ---
 
-# `SuccessFactors` to `S4`/`ERP` `BIB` Replication
+# `Standard` `SuccessFactors` to `S4`/`ERP` `BIB` Replication
 
 > **Date:** 2026-02-24
 > **Tags:** #sap #successfactors #S4 #BIB #replication
@@ -181,7 +208,7 @@ When troubleshooting or designing integrations, the following terms are fundamen
 
 ---
 
-# `S/4` to `SuccessFactors` Replication
+# `Standard` `S/4` to `SuccessFactors` Cost Center Replication
 
 > **Date:** 2026-02-24
 > **Tags:** #sap #successfactors #S4 #replication
@@ -193,7 +220,11 @@ When troubleshooting or designing integrations, the following terms are fundamen
 
 ## Cost Center code note
 
-* The standard replication job from `S4` to `EC` will concatenate Controlling Area + Cost Center code
+* The replication job from `S4` to `EC` will concatenate Controlling Area + Cost Center code
+
+## Association other than Legal Entity are not supported in the standard replication
+
+* Every time you make a full sync from `S4` to `EC`, you need to reimport the cost center associations
 
 ---
 
@@ -349,7 +380,7 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 
 ## Clock-in/Clock-out coming from external system
 
-* Clock-in/Clock-out coming from external system will be stored `OData` entity: `ExternalTimeData`.
+* Clock-in/Clock-out coming from external system will be stored in `OData` entity: `ExternalTimeData`.
 * Clock-in/Clock-out coming from `SF` UI will be stored in `OData`entity: `EmployeeTime`
 
 ---
