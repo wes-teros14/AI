@@ -224,7 +224,7 @@ When analyzing a requirement:
 
 ## Association other than Legal Entity are not supported in the standard replication
 
-* Every time you make a full sync from `S4` to `EC`, you need to reimport the cost center associations
+* Every time you make a full sync of cost centers from `S4` to `EC`, you need to reimport the cost center associations
 
 ---
 
