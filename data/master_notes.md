@@ -341,9 +341,9 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 
 ---
 
-# SuccessFactors Timesheet Integration
+# SuccessFactors `Timesheet` Integration
 
-> **Date:** 2026-02-27
+> **Date:** 2026-03-02
 > **Tags:** #sap #successfactors #time
 > **Type:** Discovery
 
@@ -351,5 +351,11 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 
 * Clock-in/Clock-out coming from external system will be stored `OData` entity: `ExternalTimeData`.
 * Clock-in/Clock-out coming from `SF` UI will be stored in `OData`entity: `EmployeeTime`
+* When posting overtime hours to `ExternalTimeData` entity, the employee needs to have regular working time hours recorded first in `SF`, otherwise the `ExternalTimeData` record will have error status.
+* It is possible to modify `ExternalTimeData` records via  API`POST`
+* We may setup a custom job to set field `correctionScenario` to `TIME_SHEET_AND_EXTERNAL_SYSTEM `in `ExternalTimeData` entity so that it may be editable from both external and `SF` `Timesheet`.
+* When Clock-in/Clock-out data is posted from external system to `TimeEvents` API, the default value of `correctionScenario` in `ExternalTimeData` entity is **`EXTERNAL_SYSTEM`**
+* If `correctionScenario` is not set during API POST to `ExternalTimeData` entity then it will be editable to both `sf` and external system
+* Posting overtime hours to `ExternalTimeData` entity **will trigger workflow approval**
 
 ---
