@@ -14,7 +14,7 @@
 * **Log**: Event records/Minutes. *(e.g., Meeting with client stakeholders)*
 * **Rule**: Policies/Regulations. *(e.g., Badminton court queuing rules)*
 * **Checklist**: Prep/Workshop questions. *(e.g., Design Workshop Question list)*
-* **Discovery**: System behavior findings. *(e.g., `PerPerson` navigation limits)*
+* **Discovery**: System behavior findings. *(e.g., `PerPerson` navigation limits, light bulb moments, gotchas)*
 * **Task**: Actions/Reminders. *(e.g., Fix Streamlit shuffle logic bug)*
 
 ---
@@ -73,6 +73,7 @@
 
 * **Names:** `Learning Management System`, `LMS`
 
+---
 
 # Integration Terminology and Aliases
 
@@ -87,6 +88,32 @@ When troubleshooting or designing integrations, the following terms are fundamen
 * **`Endpoint`:** The specific target object or function.
 * **`URL`:** The absolute text string used to locate the system.
 * **`Address`:** The network location or hostname.
+
+---
+
+# Integration Classification: Standard vs. Custom
+> **Date:** 2026-02-28
+> **Tags:** #sap #architecture #standard #custom #development
+> **Keywords:** Standard, Custom, OOTB, Prepackaged, Bespoke, Z-Object, BADI
+> **Type:** Concept
+
+## **Classification Definitions**
+
+### **1. Standard (Prepackaged / OOTB)**
+* **Definition:** Integration content provided directly by SAP (Out-Of-The-Box).
+* **Behavior:** Usually "Read-Only" or restricted. Modifications are only permitted via official extension points like **`BADI`** or specific **`IMG`** configuration.
+* **Troubleshooting:** Focus on SAP Service Marketplace, Support Portal, and checking if the latest `Content Version` is deployed in `CPI`.
+
+### **2. Custom (Bespoke / Z-Development)**
+* **Definition:** Integration content built from scratch by the project team.
+* **Behavior:** Fully flexible and fully owned by the consultant. Includes custom `Groovy` scripts, complex `XSLT`, and unique routing logic.
+* **Troubleshooting:** Focus on internal `CPI` message logs, trace mode, and debugging the specific logic mapping.
+
+## **Decision Logic**
+When analyzing a requirement:
+1. Always check if a **Standard** content exists first to minimize maintenance.
+2. Only move to **Custom** development if the requirement cannot be met via **Standard** configuration or **BADI** extensions.
+
 
 ---
 
@@ -168,7 +195,7 @@ When troubleshooting or designing integrations, the following terms are fundamen
 
 ---
 
-# `SuccessFactors` to `S4`/`ERP` `BIB` Replication
+# `Standard` `SuccessFactors` to `S4`/`ERP` `BIB` Replication
 
 > **Date:** 2026-02-24
 > **Tags:** #sap #successfactors #S4 #BIB #replication
@@ -181,7 +208,7 @@ When troubleshooting or designing integrations, the following terms are fundamen
 
 ---
 
-# `S/4` to `SuccessFactors` Replication
+# `Standard` `S/4` to `SuccessFactors` Cost Center Replication
 
 > **Date:** 2026-02-24
 > **Tags:** #sap #successfactors #S4 #replication
@@ -193,7 +220,11 @@ When troubleshooting or designing integrations, the following terms are fundamen
 
 ## Cost Center code note
 
-* The standard replication job from `S4` to `EC` will concatenate Controlling Area + Cost Center code
+* The replication job from `S4` to `EC` will concatenate Controlling Area + Cost Center code
+
+## Association other than Legal Entity are not supported in the standard replication
+
+* Every time you make a full sync of cost centers from `S4` to `EC`, you need to reimport the cost center associations
 
 ---
 
@@ -228,6 +259,7 @@ When troubleshooting or designing integrations, the following terms are fundamen
 * Metadata Framework: Admin access to `MDF` `OData` API
 
 ---
+
 # `ATO` / `STP` 'CPI' Standard Integration
 
 > **Date:** 2026-02-25
@@ -349,7 +381,7 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 
 ## Clock-in/Clock-out coming from external system
 
-* Clock-in/Clock-out coming from external system will be stored `OData` entity: `ExternalTimeData`.
+* Clock-in/Clock-out coming from external system will be stored in `OData` entity: `ExternalTimeData`.
 * Clock-in/Clock-out coming from `SF` UI will be stored in `OData`entity: `EmployeeTime`
 * When posting overtime hours to `ExternalTimeData` entity, the employee needs to have regular working time hours recorded first in `SF`, otherwise the `ExternalTimeData` record will have error status.
 * It is possible to modify `ExternalTimeData` records via  API`POST`
@@ -357,5 +389,32 @@ When the `BIB` (Business Integration Builder) flow fails to push data, perform t
 * When Clock-in/Clock-out data is posted from external system to `TimeEvents` API, the default value of `correctionScenario` in `ExternalTimeData` entity is **`EXTERNAL_SYSTEM`**
 * If `correctionScenario` is not set during API POST to `ExternalTimeData` entity then it will be editable to both `sf` and external system
 * Posting overtime hours to `ExternalTimeData` entity **will trigger workflow approval**
+
+---
+
+# `SuccessFactors` `Employee Central`
+
+> **Date:** 2026-02-28
+> **Tags:** #sap #successfactors #ec
+> **Type:** Discovery
+
+## Dropdown / `picklist` values
+
+* Some dropdown lists, like `National ID Card Type`, are **not** `Picklists`. This can be the reason why you can see the list in `Picklist Center`
+* **Configuration Path:** * Go to `Manage Business Configuration`.
+    * Navigate to `HRIS Elements` -> `nationalIdCard`-> `nationalIdCard_XXX` (where `XXX` is the Country Code). 
+* **Technical Note:** These values are governed by the **Country-Specific Data Model** rather than the `Picklist Center`.
+
+---
+
+# Posting `Foundation Data` from External Syatem going to `SuccessFactors` `Employee Central`
+
+> **Date:** 2026-02-28
+> **Tags:** #sap #successfactors #integration
+> **Type:** Discovery
+
+## `Foundation Object` Names
+
+* Make sure that during the upsert/insert the payload also includes the `defaultValue` and translations.
 
 ---
