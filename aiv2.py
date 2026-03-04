@@ -65,8 +65,8 @@ CHUNK_OVERLAP = 100     # Overlap between chunks — entries are self-contained
 # Hybrid search weights — must sum to 1.0
 # BM25 handles exact SAP term matches (entity names, TCodes, field names)
 # Vector handles semantic/plain English matches
-BM25_WEIGHT   = 0.3
-VECTOR_WEIGHT = 0.7
+BM25_WEIGHT   = 0.25
+VECTOR_WEIGHT = 0.75
 
 session_store: dict = {}
 
@@ -278,6 +278,23 @@ def expand_query(query: str) -> str:
     return expanded
 
 
+def strip_stopwords(text: str) -> str:
+    """
+    Remove common English filler words before BM25 scoring.
+    Keeps SAP-specific terms that actually drive keyword matching.
+    Only used for BM25 — vector search gets the full query.
+    """
+    STOPWORDS = {
+        "do", "you", "have", "any", "some", "the", "a", "an", "is", "are",
+        "on", "in", "for", "of", "to", "my", "your", "notes", "about", "what",
+        "how", "does", "can", "could", "would", "should", "it", "its", "this",
+        "that", "there", "with", "from", "was", "were", "been", "being", "has",
+        "had", "did", "tell", "me", "know", "get", "got", "i", "we",
+    }
+    words = [w for w in text.split() if w.lower() not in STOPWORDS]
+    return " ".join(words) if words else text  # fallback to original if everything got stripped
+
+
 def build_retriever(vector_db: Chroma, all_chunks: list):
     """
     Manual hybrid two-stage retriever — no external ensemble dependency.
@@ -309,7 +326,9 @@ def build_retriever(vector_db: Chroma, all_chunks: list):
         """
 
         # ── BM25 — keyword exact match ────────────────────────
-        bm25_docs = bm25_retriever.invoke(query)
+        #bm25_docs = bm25_retriever.invoke(query)
+        bm25_query = strip_stopwords(query)
+        bm25_docs = bm25_retriever.invoke(bm25_query)
 
         # Normalise BM25 rank to 0.0-1.0 score
         # Rank 0 (best match) → 1.0, last rank → near 0.0
@@ -405,14 +424,16 @@ You are the dedicated AI Assistant and Second Brain for Mark Wesley Ancog, actin
 ### PHASE 2: STRICT GROUNDING
 1. You MUST NOT use general SAP training knowledge to answer technical questions.
 2. If a TCode, field name, API entity, or configuration step is not explicitly in the context, do NOT suggest it.
-3. If the context does not contain the answer, reply with exactly: "I do not have enough information in your Knowledge Base to answer this."
+3. 3. If the context does not contain the answer, reply with ONLY this exact line and nothing else — no Source Entry, no Consultant Insight, no Suggested Next Step, no additional commentary:
+   "I do not have enough information in your Knowledge Base to answer this."
 
 ### PHASE 3: RESPONSE RULES
 1. Use clean Markdown with headings and bold for emphasis. Use asterisks for bullet points.
 2. Use backticks for TCode names, entity names, field names, and technical IDs.
 3. Never use hyphens or dash symbols in prose or email drafts.
 4. Never include emojis in code, scripts, or technical configurations.
-5. If the context contains URLs, SAP Notes, or Google Drive links, include them exactly as written under a References section.
+5. If the context contains URLs, SAP Notes, or Google Drive links, only include them if they appear under the same entry heading as the Source Entry you identified. 
+Do not pull References from adjacent entries in the context.
 
 ### OUTPUT FORMAT
 * **Source Entry:** The heading of the knowledge base entry used.
@@ -554,6 +575,21 @@ def main():
                 {"question": query, "docs": docs},
                 config={"configurable": {"session_id": SESSION_ID}},
             )
+
+            # Strip trailing sections if LLM triggered the "no info" fallback
+            NO_INFO_PHRASE = "I do not have enough information in your Knowledge Base to answer this."
+            if NO_INFO_PHRASE in response:
+                response = NO_INFO_PHRASE
+
+            # Also catch cases where LLM hedges instead of using the exact fallback
+            HEDGE_PATTERNS = [
+                "does not explicitly mention",
+                "does not contain information",
+                "no direct mention",
+                "not explicitly covered",
+            ]
+            if any(phrase in response.lower() for phrase in HEDGE_PATTERNS):
+                response = NO_INFO_PHRASE
 
             print(f"{response}")
             print(f"\n[TIMING] Response generated in {time.time() - t_llm:.1f}s")

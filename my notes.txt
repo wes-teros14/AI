@@ -1,1 +1,15 @@
 before a dev proj starts, list down all entities and feed to AI so you know the nuances and specific limitaions etc of entities
+
+
+
+#boundery test case:
+
+[Wes AI] > do you have notes on sf foundation objects?
+[QUERY] Expanded: 'do you have notes on sf foundation objects?' → 'do you have notes on SuccessFactors Employee Central foundation objects?'
+[RETRIEVER] stage=THRESHOLD | chunks=1 | context=1465 chars
+
+=== [AUDIT] stage=THRESHOLD | chunks=1 | context=1465 chars ===
+  [1] knowledge.md | pg N/A | vector 0.655 | bm25 0.667 | hybrid 0.659 ← winner
+       ---  ## SuccessFactors Employee Central — Foundation Object Upsert Requirements  When posting Foundation Object data fro...
+  [WEIGHTS] vector=0.7 | bm25=0.3 | threshold=0.65
+============================================================
