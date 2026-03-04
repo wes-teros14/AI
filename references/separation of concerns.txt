@@ -1,0 +1,16 @@
+User question
+     │
+     ▼
+expand_query()          ← CODE  — "what does this mean?"
+     │
+     ▼
+Chroma retrieval        ← DB    — "find relevant knowledge"
+     │
+     ▼
+knowledge.md chunks     ← MD    — "here are the facts"
+     │
+     ▼
+SYSTEM_PROMPT + LLM     ← AI    — "format and reason over facts"
+     │
+     ▼
+Answer

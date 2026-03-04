@@ -1,0 +1,12 @@
+Your question: "What SCI note do I check?"
+      │
+      ▼
+Chroma searches the vector store        ← aliases NOT applied here
+(pure embedding similarity on raw text)
+      │
+      ▼
+Chunks retrieved (wrong ones)
+      │
+      ▼
+System prompt sent to LLM               ← aliases applied HERE
+(but LLM already has wrong context)

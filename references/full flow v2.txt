@@ -1,0 +1,65 @@
+Your Question
+      │
+      ▼
+expand_query()
+Resolves aliases before Chroma sees the query
+e.g. SF → SuccessFactors Employee Central
+      │
+      ▼
+Chroma scores all chunks in the database
+0.0 (no match) ←————————→ 1.0 (perfect match)
+      │
+      ▼
+THRESHOLD_K=3
+Only top 3 highest scoring chunks are evaluated
+      │
+      ├── Any chunk above THRESHOLD_SCORE=0.65?
+      │
+      YES ──────────────────────────────────────────┐
+      │                                             │
+      NO                                            ▼
+      │                                    STAGE 1: THRESHOLD
+      ▼                                    Only passing chunks
+STAGE 2: TOPK_FALLBACK                     sent to LLM
+Just grab top TOPK_K=2                              │
+regardless of score                                 │
++ print warning                                     │
+      │                                             │
+      ├── Still empty?                              │
+      │                                             │
+      YES                                           │
+      │                                             │
+      ▼                                             │
+CIRCUIT BREAKER                                     │
+No LLM call made                                    │
+Print fallback message                              │
+"I do not have enough                               │
+information..."                                     │
+                                                    │
+      ┌─────────────────────────────────────────────┘
+      │
+      ▼
+CHUNK CONTENTS SENT TO LLM
+      │
+      ├── 1 entry in chunk?
+      │         │
+      │        LLM reads entry
+      │        answers directly
+      │
+      └── 2+ entries in chunk?
+                │
+                LLM reads ALL entries
+                identifies relevant heading
+                answers from correct entry only
+                ignores irrelevant entries
+      │
+      ▼
+SYSTEM PROMPT RULES APPLIED
+* Strict grounding — no hallucination
+* Alias resolution (second pass)
+* Formatting rules
+* Output format enforced
+      │
+      ▼
+Final Answer printed to terminal
++ [TIMING] Response generated in Xs

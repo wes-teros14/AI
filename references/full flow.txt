@@ -1,0 +1,29 @@
+Your Question
+      │
+      ▼
+Chroma scores all chunks
+      │
+      ▼
+THRESHOLD_K=3 ──► top 3 candidates evaluated
+      │
+      ├─► Any above THRESHOLD_SCORE 0.65?
+      │         │
+      │        YES ──► STAGE 1 fires
+      │                    │
+      │                    ▼
+      │             Only passing chunks
+      │             sent to LLM
+      │             [THRESHOLD]
+      │
+      └─────────NO ──► STAGE 2 fires
+                            │
+                            ▼
+                       Top TOPK_K=2 chunks
+                       sent to LLM regardless
+                       [TOPK_FALLBACK] + warning
+                            │
+                            ▼
+                  If even these are empty
+                  → Circuit breaker fires
+                  → "I don't have enough
+                     information..."

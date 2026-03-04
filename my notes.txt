@@ -1,0 +1,4 @@
+before a dev proj starts, list down all entities and feed to AI so you know the nuances and specific limitaions etc of entities
+
+enter this for BP sync address issue in S4
+https://me.sap.com/notes/2917035
