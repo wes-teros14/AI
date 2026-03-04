@@ -1,45 +1,40 @@
 ## Knowledge Base Index
 
 Category: Integration Architecture
-- Integration Architecture — Category Summary
 - Connectivity Term Synonyms — API Endpoint URL Address
 - Integration Classification — Standard vs Custom SAP Integration
 - Integration Design — Record-Level Delta vs Field-Level Delta
 - Integration Design Workshop — Common Questions to Ask Before Building
 
 Category: SAP Integration Suite and CPI
-- SAP Integration Suite and CPI — Category Summary
 - SAP Integration Suite — Tenant Provisioning and Licensing Reference
 - ATO STP Integration — Multiple ABN Cross Entity Authorization
 
 Category: BIB Replication
-- BIB Replication — Category Summary
+- BIB Replication — Replication Target System Configuration in SuccessFactors and S/4
 - BIB Replication — What It Is and How It Works
 - BIB Replication — Action Reason and BP Sync Behaviour
+- BIB Replication — Employee Multiple Assignments Address Replication Failure and BP Sync Fix
 - BIB Replication Failure — Data Not Arriving at S4 or ECC
 - SAP Cloud Connector — Always Use Path and All Sub-paths
 - SAPRouter — Purpose and When Required
 
 Category: SuccessFactors OData API
-- SuccessFactors OData API — Category Summary
 - SuccessFactors Compound Employee API — Delta Behaviour and MDF Limitations
 - SuccessFactors OData — Custom MDF Objects Cannot Navigate from PerPerson
 - SuccessFactors OData — EmpPayCompRecurring Insert Behaviour and Delta Risk
 - SuccessFactors OData — MDF Field API Visibility Rules
 
 Category: SuccessFactors Configuration and Permissions
-- SuccessFactors Configuration and Permissions — Category Summary
 - SuccessFactors API User — Required Permissions for CPI Integration
 - SuccessFactors Employee Central — Dropdown Values That Are Not Picklists
 - SuccessFactors Employee Central — Foundation Object Upsert Requirements
 
 Category: SuccessFactors Modules
-- SuccessFactors Modules — Category Summary
 - SuccessFactors Time Management — ExternalTimeData vs EmployeeTime and correctionScenario
 - SuccessFactors LMS — Single Header Row File Configuration
 
 Category: System Replication
-- System Replication — Category Summary
 - S4HANA to SuccessFactors — Cost Center Constraints and Code Concatenation
 - SuccessFactors to ECP — Point-to-Point Connection Setup
 
@@ -48,12 +43,6 @@ Category: System Replication
 # ════════════════════════════════════════════════════
 # CATEGORY 1 — Integration Architecture
 # ════════════════════════════════════════════════════
-
-## Integration Architecture — Category Summary
-
-This category covers foundational integration concepts and design decisions. Entries include connectivity term synonyms explaining why API, Endpoint, URL, and Address refer to the same failure point. Integration classification covering when to use standard SAP content versus custom development and the decision rule between them. Delta strategy trade-offs between record-level and field-level delta and when to use each. Workshop scoping questions to ask before building any SAP integration interface.
-
----
 
 ## Connectivity Term Synonyms — API, Endpoint, URL, Address
 
@@ -95,12 +84,6 @@ Handling changes: Do we send deleted records? Do we send records on the day they
 # CATEGORY 2 — SAP Integration Suite and CPI
 # ════════════════════════════════════════════════════
 
-## SAP Integration Suite and CPI — Category Summary
-
-This category covers SAP Integration Suite platform knowledge and CPI-specific integrations. Entries include tenant provisioning and licensing reference covering SAP Note 2903776 and what services are included in an Integration Suite subscription. ATO STP integration covering the Cross Entity Authorization setup for organisations with multiple ABNs in Australia.
-
----
-
 ## SAP Integration Suite — Tenant Provisioning and Licensing Reference
 
 SAP Integration Suite is an umbrella platform that contains multiple services. Common services include SAP Integration Suite messaging and flows (the service most people refer to when they say CPI), Open Connectors, and API Management. Each service has its own subscription and licensing boundaries. Tenant provisioning details and subscription boundaries for SAP Integration Suite and its services are documented in SAP Note 2903776. Use this note to verify which services are included in a tenant subscription and to confirm provisioning status.
@@ -123,12 +106,13 @@ Reference: https://drive.google.com/file/d/1-hM8c-mCcrbyvyIQnmp0NlBoW5UGjnT8/vie
 # CATEGORY 3 — BIB Replication
 # ════════════════════════════════════════════════════
 
-## BIB Replication — Category Summary
+## BIB Replication — Replication Target System Configuration in SuccessFactors and S/4
 
-This category covers everything about Business Integration Builder replication between SuccessFactors and S/4HANA or ECC. Entries include what BIB is and its high level integration flow across SF, CPI, and S/4. Action Reason field behaviour and how BP Sync creates Business Partners downstream. Troubleshooting when data is not arriving at S/4 or ECC covering SICF service activation and SCC access policy fixes. SAP Cloud Connector path configuration rule. SAPRouter purpose and when it is required for on-premise access.
+In BIB replication, the Replication Target System must match between SuccessFactors and S/4.
+In SuccessFactors, it is configured via Manage Data > Replication Target System. In S/4, it
+is configured via TCode SM30, table V_ECPAO_QRY_CFG. Both sides must have the same code.
 
 ---
-
 ## BIB Replication — What It Is and How It Works
 
 BIB (Business Integration Builder) is a replication framework developed by SAP that orchestrates the movement of employee and organisational data between SuccessFactors and S/4HANA or ECC. It is not a fully custom integration — it is a pre-built SAP framework with its own flow, mapping, and activation steps built into S/4 or ECC. Limited customisation is possible through custom field mappings and BAdI implementations within the BIB framework, but it does not support full custom development such as Z-programs.
@@ -152,9 +136,25 @@ In SuccessFactors to S/4HANA BIB replication, the Action Reason field in S/4 is 
 
 ---
 
+
+## BIB Replication — Employee Multiple Assignments Address Replication Failure and BP Sync Fix
+
+When SuccessFactors is configured with Employee Multiple Assignments and both assignments
+are active, address data sometimes does not replicate correctly to S/4 or ECC. This causes
+the BP Sync job to fail because a valid address is required for Business Partner creation.
+A possible fix is to check whether Home and Host address is enabled in SuccessFactors —
+enabling it has resolved this issue in known cases.
+
+References:
+https://me.sap.com/notes/2917035
+https://me.sap.com/notes/2347654
+https://me.sap.com/notes/2835695
+
+---
+
 ## BIB Replication Failure — Data Not Arriving at S/4 or ECC
 
-When CPI fails to deliver BIB replication data to S/4 or ECC and nothing is arriving at the target system, check these two common causes.
+When CPI is sending BIB replication data but S/4 or ECC is not receiving it, check these two common causes.
 
 Fix 1 — SICF service inactive: TCode SICF > navigate to default_host/sap/bc/srt/scs/sap/. If greyed out, right-click > Activate Service. Inactive services silently reject inbound SOAP calls from CPI.
 
@@ -177,12 +177,6 @@ SAPRouter is a proxy and relay component that must be installed on an S/4HANA or
 # ════════════════════════════════════════════════════
 # CATEGORY 4 — SuccessFactors OData API
 # ════════════════════════════════════════════════════
-
-## SuccessFactors OData API — Category Summary
-
-This category covers SuccessFactors OData API behaviours, limitations, and gotchas discovered through project experience. Entries include Compound Employee API delta behaviour using periodDelta and which standard MDF objects are permitted. Custom MDF navigation limitation from PerPerson and the workaround using direct MDF entity calls. EmpPayCompRecurring insert behaviour where inserting a new pay component refreshes all startDates and the downstream delta risk this creates. MDF field API visibility rules and why a field can be missing from OData even when RBP is fully granted.
-
----
 
 ## SuccessFactors Compound Employee API — Delta Behaviour and MDF Limitations
 
@@ -216,12 +210,6 @@ In SuccessFactors, visibility and API access for custom MDF objects are managed 
 # CATEGORY 5 — SuccessFactors Configuration and Permissions
 # ════════════════════════════════════════════════════
 
-## SuccessFactors Configuration and Permissions — Category Summary
-
-This category covers SuccessFactors system configuration and permission setup required for integrations. Entries include the full list of permissions an API user needs under Manage Permission Roles to support CPI and third-party integrations. Employee Central dropdown values that are not Picklists and how to configure them via Manage Business Configuration. Foundation Object upsert requirements covering the defaultValue and translations fields that must be included in API payloads.
-
----
-
 ## SuccessFactors API User — Required Permissions for CPI Integration
 
 For an API user in SuccessFactors to support CPI or third-party integrations, the following permissions must be granted under Manage Permission Roles.
@@ -250,12 +238,6 @@ When posting Foundation Object data from an external system to SuccessFactors Em
 # CATEGORY 6 — SuccessFactors Modules
 # ════════════════════════════════════════════════════
 
-## SuccessFactors Modules — Category Summary
-
-This category covers SuccessFactors module-specific integration behaviours. Entries include Time Management covering how ExternalTimeData and EmployeeTime differ, how correctionScenario controls editability, overtime posting rules, and workflow approval triggers. LMS covering the connector configuration property for single header row file processing.
-
----
-
 ## SuccessFactors Time Management — ExternalTimeData vs EmployeeTime and correctionScenario
 
 In SuccessFactors Time Management integrations, clock-in/out from an external system is stored in OData entity ExternalTimeData. Clock-in/out from the SF UI is stored in EmployeeTime.
@@ -277,12 +259,6 @@ sfuser.connector.input.file.header.skip.records.count=0
 # ════════════════════════════════════════════════════
 # CATEGORY 7 — System Replication
 # ════════════════════════════════════════════════════
-
-## System Replication — Category Summary
-
-This category covers non-BIB replication flows between SAP systems and SuccessFactors. Entries include S/4HANA to SuccessFactors cost center replication covering the one-to-many constraint, Controlling Area and Cost Center code concatenation behaviour, and the requirement to reimport associations after a full sync. SuccessFactors to ECP Point-to-Point connection setup covering the X.509 certificate configuration steps in both ECP and SuccessFactors Security Center.
-
----
 
 ## S/4HANA to SuccessFactors — Cost Center Constraints and Code Concatenation
 

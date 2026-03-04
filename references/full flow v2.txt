@@ -2,26 +2,44 @@ Your Question
       │
       ▼
 expand_query()
-Resolves aliases before Chroma sees the query
+Resolves SAP aliases before retrieval
 e.g. SF → SuccessFactors Employee Central
+     BIB → Business Integration Builder replication
       │
       ▼
-Chroma scores all chunks in the database
-0.0 (no match) ←————————→ 1.0 (perfect match)
+┌─────────────────────────────────────────────────────┐
+│              HYBRID SEARCH                          │
+│                                                     │
+│  BM25 (Keyword)          Vector (Semantic)          │
+│  Exact term matching     Meaning-based matching     │
+│  Great for SAP entity    Great for plain English    │
+│  names and TCodes        questions and concepts     │
+│                                                     │
+│  Returns ranked list     Returns scored list        │
+│  Rank normalised 0-1     Score already 0.0-1.0      │
+│                                                     │
+│  Combined Score = (BM25_WEIGHT x bm25_score)        │
+│                 + (VECTOR_WEIGHT x vector_score)    │
+│               = (0.3 x bm25) + (0.7 x vector)       │
+│                                                     │
+│  Example: EmpPayCompRecurring                       │
+│    bm25=1.000  vector=0.554                         │
+│    combined = (0.3x1.000) + (0.7x0.554) = 0.688     │
+└─────────────────────────────────────────────────────┘
       │
       ▼
 THRESHOLD_K=3
-Only top 3 highest scoring chunks are evaluated
+Top 3 candidates evaluated by combined score
       │
-      ├── Any chunk above THRESHOLD_SCORE=0.65?
+      ├── Any chunk with combined score >= THRESHOLD_SCORE=0.65?
       │
       YES ──────────────────────────────────────────┐
       │                                             │
       NO                                            ▼
       │                                    STAGE 1: THRESHOLD
-      ▼                                    Only passing chunks
-STAGE 2: TOPK_FALLBACK                     sent to LLM
-Just grab top TOPK_K=2                              │
+      ▼                                    All passing chunks sent to LLM
+STAGE 2: TOPK_FALLBACK                     (audit shows per chunk:
+Grab top TOPK_K=2                           vector x.xxx | bm25 x.xxx | hybrid x.xxx)
 regardless of score                                 │
 + print warning                                     │
       │                                             │
@@ -40,25 +58,38 @@ information..."                                     │
       │
       ▼
 CHUNK CONTENTS SENT TO LLM
+LLM receives full text of all passing chunks
+Scores are never shown to the LLM
       │
       ├── 1 entry in chunk?
       │         │
-      │        LLM reads entry
-      │        answers directly
+      │         LLM reads entry
+      │         answers directly
       │
       └── 2+ entries in chunk?
                 │
-                LLM reads ALL entries
-                identifies relevant heading
-                answers from correct entry only
-                ignores irrelevant entries
+                Happens when two short related entries
+                merge below CHUNK_SIZE=1500 chars
+                e.g. "BIB What It Is" merges with
+                     "BIB Replication Failure" entry
+                     Audit preview shows first 120 chars only
+                     so the second entry is not visible in audit
+                │
+                LLM reads ALL entries in the chunk
+                matches each heading against the question
+                selects the relevant heading
+                answers only from that entry
+                ignores all other entries in the chunk
+                reports selected heading as Source Entry
       │
       ▼
 SYSTEM PROMPT RULES APPLIED
 * Strict grounding — no hallucination
-* Alias resolution (second pass)
-* Formatting rules
-* Output format enforced
+* If answer not in context → "I do not have enough information"
+* Alias resolution (second pass in LLM)
+* Formatting rules enforced
+* Output format: Source Entry / Answer / References /
+                 Consultant Insight / Suggested Next Step
       │
       ▼
 Final Answer printed to terminal

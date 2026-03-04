@@ -2,7 +2,9 @@
 # Wes AI — SAP Integration Second Brain
 # ══════════════════════════════════════════════════════════════
 # RETRIEVAL FLOW:
-#   Question → Chroma scores all chunks → Stage 1 threshold filter
+#   Question → expand_query (alias resolution)
+#   → Hybrid search: BM25 (exact) + Vector (semantic) → combined score
+#   → Stage 1 threshold filter on hybrid score (THRESHOLD_SCORE)
 #   → If match found: send to LLM (THRESHOLD)
 #   → If no match: fallback to Top K (TOPK_FALLBACK) + warn user
 #   → If empty: circuit breaker fires, no LLM call made
@@ -13,8 +15,9 @@
 #   reference/         → personal notes, never ingested
 #
 # MAINTENANCE:
-#   add --reingest flag to wipe and rebuild vector store after editing knowledge.md
+#   After editing knowledge.md → run: python aiv2.py --reingest
 # ══════════════════════════════════════════════════════════════
+
 
 import os
 import sys
@@ -34,6 +37,7 @@ from langchain_community.document_loaders import (
     PyPDFLoader, Docx2txtLoader, UnstructuredExcelLoader,
     TextLoader, DirectoryLoader,
 )
+from langchain_community.retrievers import BM25Retriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_chroma import Chroma
@@ -48,15 +52,21 @@ load_dotenv()
 DB_DIR    = "./db"
 DATA_PATH = "./data"
 
-SELECTED_LLM   = "groq"   # "groq" | "gemini"
-#FORCE_REINGEST = True     # Set True after editing knowledge.md, then flip back
+SELECTED_LLM = "groq"                    # "groq" | "gemini"
+LLM_MODEL    = "llama-3.3-70b-versatile" # model name shown in header and used in get_llm()
 
-THRESHOLD_SCORE = 0.65     # Stage 1 — min confidence to accept a chunk, if score is below this, it won't be included in the context at all
-THRESHOLD_K     = 3        # Stage 1 — reduced to keep context window small
-TOPK_K          = 2        # Stage 2 — reduced to keep context window small
+THRESHOLD_SCORE = 0.65  # Stage 1 — min vector score to accept a chunk
+THRESHOLD_K     = 3     # Stage 1 — top K candidates to evaluate
+TOPK_K          = 2     # Stage 2 — fallback top K regardless of score
 
-CHUNK_SIZE    = 1500       # Slightly larger to keep full entries intact
-CHUNK_OVERLAP = 100        # Reduced — entries are self-contained
+CHUNK_SIZE    = 1500    # Max chars per chunk — keeps full entries intact
+CHUNK_OVERLAP = 100     # Overlap between chunks — entries are self-contained
+
+# Hybrid search weights — must sum to 1.0
+# BM25 handles exact SAP term matches (entity names, TCodes, field names)
+# Vector handles semantic/plain English matches
+BM25_WEIGHT   = 0.3
+VECTOR_WEIGHT = 0.7
 
 session_store: dict = {}
 
@@ -74,9 +84,9 @@ def get_llm():
         )
     elif SELECTED_LLM == "groq":
         return ChatGroq(
-            model="llama-3.3-70b-versatile",  # faster than 70b — swap to llama-3.3-70b-versatile for production
+            model=LLM_MODEL,
             temperature=0,
-            request_timeout=60,      # fail fast instead of hanging forever
+            request_timeout=60,
             max_retries=2,
         )
     raise ValueError(f"Unknown SELECTED_LLM: '{SELECTED_LLM}'. Use 'groq' or 'gemini'.")
@@ -87,17 +97,17 @@ def get_llm():
 # ──────────────────────────────────────────────────────────────
 
 def print_header(bot_name: str) -> None:
-    print("\n" * 3)  # just add spacing instead of wiping the terminal
-    #os.system("cls" if os.name == "nt" else "clear")
+    print("\n" * 3)
     w = 60
     print("=" * w)
     print(bot_name.center(w))
     print("=" * w)
     print(f"  STATUS  : ONLINE")
-    print(f"  MODEL   : {SELECTED_LLM.upper()}")
+    print(f"  MODEL   : {LLM_MODEL} via {SELECTED_LLM.upper()}")
     print(f"  MEMORY  : ACTIVE (Session Based)")
+    print(f"  SEARCH  : Hybrid BM25 {BM25_WEIGHT} + Vector {VECTOR_WEIGHT}")
     print("=" * w)
-    print("  Commands: 'exit' | 'audit' | 'clear' | 'reingest'")
+    print("  Commands: 'exit' | 'audit' | 'clear'")
     print("=" * w)
 
 
@@ -106,21 +116,45 @@ def print_audit_log(docs: list, stage: str, context_chars: int) -> None:
     for i, doc in enumerate(docs):
         source = os.path.basename(doc.metadata.get("source", "Unknown"))
         page   = doc.metadata.get("page", "N/A")
-        score  = doc.metadata.get("relevance_score", "N/A")
+        vscore = doc.metadata.get("relevance_score", "N/A")
+        bscore = doc.metadata.get("bm25_score", "N/A")
+        hscore = doc.metadata.get("hybrid_score", "N/A")
+        winner = " ← winner" if i == 0 else ""
         if isinstance(page, int):
             page += 1
         preview = doc.page_content.replace("\n", " ")[:120]
-        print(f"  [{i+1}] {source} | pg {page} | score {score}")
+        print(f"  [{i+1}] {source} | pg {page} | vector {vscore} | bm25 {bscore} | hybrid {hscore}{winner}")
         print(f"       {preview}...")
+    print(f"  [WEIGHTS] vector={VECTOR_WEIGHT} | bm25={BM25_WEIGHT} | threshold={THRESHOLD_SCORE}")
     print("=" * 60 + "\n")
-    input("  [Press Enter to continue...]")  # ← pause here so you can read it
+    input("  [Press Enter to continue...]")
     print()
+
 
 # ──────────────────────────────────────────────────────────────
 # 4. DATA INGESTION
 # ──────────────────────────────────────────────────────────────
 
-def ingest_data(folder_path: str, persist_dir: str) -> Chroma:
+def make_splitter() -> RecursiveCharacterTextSplitter:
+    """Shared splitter — used by both ingest_data and BM25 chunk loader."""
+    return RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=[
+            "\n---\n",   # knowledge.md entry boundary — split here first
+            "\n## ",     # H2 headings
+            "\n\n",      # paragraphs
+            "\n",
+            " ",
+        ],
+    )
+
+
+def ingest_data(folder_path: str, persist_dir: str) -> tuple:
+    """
+    Loads, splits, embeds and stores all documents.
+    Returns (vector_db, chunks) — chunks needed for BM25 index.
+    """
     t_start = time.time()
     print(f"\n[INGEST] Scanning '{folder_path}'...")
 
@@ -145,23 +179,12 @@ def ingest_data(folder_path: str, persist_dir: str) -> Chroma:
 
     if not documents:
         print("[INGEST] No files found. Check your data folder.")
-        return None
+        return None, []
     print(f"[INGEST] Loading done in {time.time() - t0:.1f}s")
 
     # ── Split ────────────────────────────────────────────────
     t1 = time.time()
-    # Entry-aware separators — respects knowledge.md --- boundaries first
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=[
-            "\n---\n",   # knowledge.md entry boundary — always split here first
-            "\n## ",     # H2 headings
-            "\n\n",      # paragraphs
-            "\n",
-            " ",
-        ],
-    )
+    splitter = make_splitter()
     chunks = splitter.split_documents(documents)
     avg_size = sum(len(c.page_content) for c in chunks) // len(chunks) if chunks else 0
     print(f"[INGEST] {len(chunks)} chunks created | avg size: {avg_size} chars | done in {time.time() - t1:.1f}s")
@@ -177,7 +200,7 @@ def ingest_data(folder_path: str, persist_dir: str) -> Chroma:
     )
     print(f"[INGEST] Embedding + storage done in {time.time() - t2:.1f}s")
     print(f"[INGEST] Total ingestion time: {time.time() - t_start:.1f}s\n")
-    return vector_db
+    return vector_db, chunks
 
 
 def load_vectorstore(persist_dir: str) -> Chroma:
@@ -187,6 +210,25 @@ def load_vectorstore(persist_dir: str) -> Chroma:
     db = Chroma(persist_directory=persist_dir, embedding_function=embeddings)
     print(f"[DB] Loaded in {time.time() - t0:.1f}s")
     return db
+
+
+def load_chunks_for_bm25(folder_path: str) -> list:
+    """
+    Re-loads and splits documents to build the BM25 keyword index.
+    Called when loading an existing vector store from disk.
+    BM25 index is not persisted — rebuilt in memory on each startup.
+    """
+    t0 = time.time()
+    print(f"[BM25] Building keyword index from '{folder_path}'...")
+    raw_docs = DirectoryLoader(
+        folder_path, glob="**/*.md",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"},
+    ).load()
+    splitter = make_splitter()
+    chunks = splitter.split_documents(raw_docs)
+    print(f"[BM25] {len(chunks)} chunks indexed in {time.time() - t0:.1f}s")
+    return chunks
 
 
 # ──────────────────────────────────────────────────────────────
@@ -205,100 +247,138 @@ def get_session_history(session_id: str) -> ChatMessageHistory:
 
 def expand_query(query: str) -> str:
     """
-    Resolve known aliases in the query before retrieval.
-    This ensures Chroma searches on canonical terms, not aliases.
+    Resolve known SAP aliases in the query before retrieval.
+    Ensures Chroma and BM25 search on canonical terms, not shorthand.
     """
     replacements = {
-        # Integration Suite aliases — expand to canonical CPI terms
         "SCI"  : "SAP Cloud Integration CPI",
         "SCPI" : "SAP Cloud Integration CPI",
-
-        # SuccessFactors aliases
         "SFSF" : "SuccessFactors Employee Central",
         "SF"   : "SuccessFactors Employee Central",
         "EC"   : "Employee Central SuccessFactors",
-
-        # Other systems
         "S4"   : "S/4HANA S/4",
         "ECP"  : "Employee Central Payroll",
         "BIB"  : "Business Integration Builder replication",
         "PTP"  : "Point-to-Point replication",
         "SCC"  : "SAP Cloud Connector",
-
-        # Too short — matches common English words
-        # "IS"  : "SAP Integration Suite",
+        # "IS"  : removed — too short, matches common English words
     }
 
     expanded = query
     for alias, full_name in replacements.items():
-       
-        # Word boundary match — avoids replacing partial words
         expanded = re.sub(rf'\b{alias}\b', full_name, expanded, flags=re.IGNORECASE)
 
-    # ── Deduplicate consecutive repeated words ───────────────
-    # Handles cases like "replication replication" or "CPI CPI"
-    # that occur when the query already contains the expanded term
+    # Deduplicate consecutive repeated words
+    # Handles "replication replication" when query already contains expanded term
     expanded = re.sub(r'\b(\w+)\s+\1\b', r'\1', expanded, flags=re.IGNORECASE)
 
-    # Log if query was changed so you can see it working
     if expanded != query:
         print(f"[QUERY] Expanded: '{query}' → '{expanded}'")
 
     return expanded
 
-def build_retriever(vector_db: Chroma):
+
+def build_retriever(vector_db: Chroma, all_chunks: list):
     """
-    Hybrid two-stage retriever with explicit relevance scoring.
+    Manual hybrid two-stage retriever — no external ensemble dependency.
 
-    Stage 1 — Threshold: scores every chunk and only keeps those
-              above THRESHOLD_SCORE. Ensures strict grounding.
+    BM25   — exact term matching via rank-bm25.
+             Handles SAP entity names, TCodes, field names that embedding
+             models don't understand semantically (e.g. EmpPayCompRecurring).
+    Vector — semantic matching via Chroma cosine similarity.
+             Handles plain English questions and concept-level queries.
 
-    Stage 2 — Top K fallback: fires only when Stage 1 returns nothing.
-              Prevents silent empty-context failures on valid questions
-              that score slightly below the threshold.
+    Hybrid score = (BM25_WEIGHT * normalised_bm25) + (VECTOR_WEIGHT * vector_score)
+    Threshold decision uses hybrid score — more reliable than vector alone.
+    Vector score alone underestimates exact SAP term matches, hybrid corrects this.
 
-    Scores are attached to doc.metadata so the audit log can display them.
-    Returns a callable: query -> (docs, stage_label)
+    Stage 1 — at least one chunk has hybrid score >= THRESHOLD_SCORE
+    Stage 2 — no chunk passed threshold, return best hybrid candidates
+    Circuit breaker — no docs returned at all, skip LLM call
     """
+
+    # BM25 index built in memory from all chunks at startup
+    bm25_retriever = BM25Retriever.from_documents(all_chunks)
+    bm25_retriever.k = THRESHOLD_K * 2  # fetch more candidates for merging
+
+    def hybrid_search(query: str, k: int) -> list:
+        """
+        Merge BM25 and vector results by weighted combined score.
+        Returns list of (doc, combined_score, vector_score) sorted by
+        combined score descending, top k.
+        """
+
+        # ── BM25 — keyword exact match ────────────────────────
+        bm25_docs = bm25_retriever.invoke(query)
+
+        # Normalise BM25 rank to 0.0-1.0 score
+        # Rank 0 (best match) → 1.0, last rank → near 0.0
+        total = max(len(bm25_docs), 1)
+        bm25_score_map = {
+            doc.page_content[:100]: round(1.0 - (rank / total), 3)
+            for rank, doc in enumerate(bm25_docs)
+        }
+
+        # ── Vector — semantic match ───────────────────────────
+        vector_results = vector_db.similarity_search_with_relevance_scores(
+            query, k=k * 2
+        )
+        vector_score_map = {
+            doc.page_content[:100]: round(score, 3)
+            for doc, score in vector_results
+        }
+
+        # ── Merge unique docs from both sources ───────────────
+        all_docs = {}
+        for doc in bm25_docs:
+            all_docs[doc.page_content[:100]] = doc
+        for doc, _ in vector_results:
+            key = doc.page_content[:100]
+            if key not in all_docs:
+                all_docs[key] = doc
+
+        # ── Compute weighted hybrid score per doc ─────────────
+        scored = []
+        for key, doc in all_docs.items():
+            bm25_s   = bm25_score_map.get(key, 0.0)
+            vector_s = vector_score_map.get(key, 0.0)
+            combined = round((BM25_WEIGHT * bm25_s) + (VECTOR_WEIGHT * vector_s), 3)
+
+            # Attach all three scores to metadata for audit log visibility
+            doc.metadata["relevance_score"] = vector_s
+            doc.metadata["bm25_score"]      = bm25_s
+            doc.metadata["hybrid_score"]    = combined
+
+            scored.append((doc, combined, vector_s))
+
+        # Sort by hybrid score descending, return top k
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:k]
 
     def retrieve(query: str) -> tuple[list, str]:
 
-        # Resolve aliases before Chroma sees the query
         expanded_query = expand_query(query)
 
-        # ── Stage 1 ────────────────────────────────────────────────────
-        # similarity_search_with_relevance_scores returns (doc, score) pairs
-        # where score is 0.0 (no match) to 1.0 (perfect match)
-        results = vector_db.similarity_search_with_relevance_scores(
-            expanded_query, k=THRESHOLD_K
-        )
+        # ── Stage 1 — threshold check on hybrid score ────────
+        # Hybrid score is more reliable than vector score alone.
+        # Vector score alone underestimates exact SAP term matches
+        # (e.g. EmpPayCompRecurring scores 0.554 vector but 0.732 hybrid).
+        # Using hybrid score as the gate captures these cases correctly.
+        candidates = hybrid_search(expanded_query, THRESHOLD_K)
 
-        threshold_docs = []
-        for doc, score in results:
-            # Attach score to metadata so print_audit_log can display it
-            doc.metadata["relevance_score"] = round(score, 3)
-            # Only keep chunks that meet the minimum confidence bar
-            if score >= THRESHOLD_SCORE:
-                threshold_docs.append(doc)
+        threshold_docs = [
+            doc for doc, combined, vec in candidates
+            if combined >= THRESHOLD_SCORE   # gate on hybrid, not vector alone
+        ]
 
-        # If at least one chunk passed the threshold, return immediately
         if threshold_docs:
             return threshold_docs, "THRESHOLD"
 
-        # ── Stage 2 ────────────────────────────────────────────────────
-        # Fires only when zero chunks passed Stage 1.
-        # Returns best available chunks regardless of score.
-        # Caller will warn the user that confidence is lower.
-        fallback_results = vector_db.similarity_search_with_relevance_scores(
-            expanded_query, k=TOPK_K
-        )
-
-        fallback_docs = []
-        for doc, score in fallback_results:
-            # Still attach scores so audit log is consistent across both stages
-            doc.metadata["relevance_score"] = round(score, 3)
-            fallback_docs.append(doc)
-
+        # ── Stage 2 — Top K fallback ──────────────────────────
+        # No chunk passed hybrid threshold
+        # Return best hybrid candidates regardless of score
+        fallback_candidates = hybrid_search(expanded_query, TOPK_K)
+        fallback_docs = [doc for doc, combined, vec in fallback_candidates]
         return fallback_docs, "TOPK_FALLBACK"
 
     return retrieve
@@ -367,7 +447,7 @@ def build_rag_chain(vector_db: Chroma):
         )
 
     # Docs are pre-fetched in the main loop and injected directly —
-    # this avoids a second retrieval call inside the chain.
+    # avoids a second retrieval call inside the chain
     chain = (
         {
             "context":      lambda x: format_docs(x["docs"]),
@@ -398,7 +478,7 @@ def main():
     SESSION_ID = "wes_session_01"
     SHOW_AUDIT = False
 
-    # ── Re-ingest flag — pass --reingest to wipe and rebuild db ──
+    # ── Startup flag — python aiv2.py --reingest ─────────────
     parser = argparse.ArgumentParser()
     parser.add_argument("--reingest", action="store_true", help="Wipe and rebuild the vector store")
     args = parser.parse_args()
@@ -407,18 +487,18 @@ def main():
         print("[DB] --reingest flag detected. Wiping existing database...")
         shutil.rmtree(DB_DIR)
 
-
-    vector_db = (
-        ingest_data(DATA_PATH, DB_DIR)
-        if not os.path.exists(DB_DIR)
-        else load_vectorstore(DB_DIR)
-    )
+    # ── Vector Store + BM25 Setup ────────────────────────────
+    if not os.path.exists(DB_DIR):
+        vector_db, all_chunks = ingest_data(DATA_PATH, DB_DIR)
+    else:
+        vector_db  = load_vectorstore(DB_DIR)
+        all_chunks = load_chunks_for_bm25(DATA_PATH)
 
     if not vector_db:
         print("[ERROR] Vector store could not be initialised. Exiting.")
         sys.exit(1)
 
-    retriever = build_retriever(vector_db)
+    retriever = build_retriever(vector_db, all_chunks)
     chain     = build_rag_chain(vector_db)
 
     print_header(BOT_NAME)
@@ -441,22 +521,11 @@ def main():
                 session_store[SESSION_ID] = ChatMessageHistory()
                 print("[MEMORY] Session cleared.")
                 continue
-            if query.lower() == "reingest":
-                print("[DB] Wiping and rebuilding vector store...")
-                shutil.rmtree(DB_DIR)
-                vector_db = ingest_data(DATA_PATH, DB_DIR)
-                retriever = build_retriever(vector_db)
-                chain     = build_rag_chain(vector_db)
-                print("[DB] Done. Ready.")
-                continue
 
             # ── Retrieval ────────────────────────────────────
             docs, stage = retriever(query)
 
-            # Calculate context size before sending to LLM
             context_chars = sum(len(d.page_content) for d in docs)
-
-            # Always show retrieval summary so you can monitor without full audit
             print(f"[RETRIEVER] stage={stage} | chunks={len(docs)} | context={context_chars} chars")
 
             if SHOW_AUDIT:
@@ -471,11 +540,9 @@ def main():
                 history.add_ai_message(fallback)
                 continue
 
-            # Warn when Top K fallback fires — confidence is lower
             if stage == "TOPK_FALLBACK":
                 print("[RETRIEVER] Low confidence match — answer may be approximate.")
 
-            # Warn if context is large — likely cause of slow LLM responses
             if context_chars > 4000:
                 print(f"[WARN] Large context ({context_chars} chars) — response may be slow on free tier.")
 
