@@ -1,0 +1,68 @@
+═══════════════════════════════════════════════════════════
+Wes AI — High Level Flow
+═══════════════════════════════════════════════════════════
+
+
+  User Question
+       │
+       ▼
+  ┌─────────────┐
+  │  REWRITE    │  LLM rewrites vague follow-ups into
+  │  QUERY      │  standalone queries using chat history.
+  └──────┬──────┘  Skipped if no history.
+         │
+         ▼
+  ┌─────────────┐
+  │  EXPAND     │  Resolve SAP aliases to full names.
+  │  ALIASES    │  e.g. SF → SuccessFactors Employee Central
+  │  + DEDUP    │  Remove duplicate words from expansion.
+  └──────┬──────┘
+         │
+         ▼
+  ┌─────────────────────────────────────────┐
+  │          HYBRID SEARCH                  │
+  │                                         │
+  │  BM25 (keywords)   Vector (semantic)    │
+  │  stopwords removed  full query kept     │
+  │         │                │              │
+  │         └───── merge ────┘              │
+  │               by weighted               │
+  │               hybrid score              │
+  │         (0.25 BM25 + 0.75 Vector)       │
+  └──────────────────┬──────────────────────┘
+                     │
+                     ▼
+  ┌─────────────────────────────────────────┐
+  │          RETRIEVAL DECISION             │
+  │                                         │
+  │  Score >= 0.65?                         │
+  │    YES → THRESHOLD (high confidence)    │
+  │    NO  → TOPK_FALLBACK (best effort)   │
+  │    EMPTY → CIRCUIT BREAKER (no LLM)    │
+  └──────────────────┬──────────────────────┘
+                     │
+                     ▼
+  ┌─────────────────────────────────────────┐
+  │          LLM INFERENCE                  │
+  │                                         │
+  │  Retrieved chunks + chat history        │
+  │  + system prompt (strict grounding)     │
+  │           │                             │
+  │           ▼                             │
+  │  Groq llama-3.3-70b-versatile           │
+  │           │                             │
+  │           ▼                             │
+  │  Structured answer:                     │
+  │    Source Entry / Answer / References    │
+  │    Consultant Insight / Next Step       │
+  └──────────────────┬──────────────────────┘
+                     │
+                     ▼
+  ┌─────────────┐
+  │  POST-      │  Catch "no info" fallback or hedge
+  │  PROCESSING │  patterns. Force clean response
+  │  GUARD      │  if LLM didn't comply.
+  └──────┬──────┘
+         │
+         ▼
+  Final Answer

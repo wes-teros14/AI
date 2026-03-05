@@ -1,37 +1,268 @@
-Your Question
-      │
-      ▼
-expand_query()
-Resolves SAP aliases before retrieval
-e.g. SF → SuccessFactors Employee Central
-     BIB → Business Integration Builder replication
-      │
-      ▼
+═══════════════════════════════════════════════════════════
+Wes AI — Full Retrieval and Response Flow (v3)
+═══════════════════════════════════════════════════════════
+Stack: Python, LangChain, Chroma, Groq llama-3.3-70b-versatile,
+       Google gemini-embedding-001, rank-bm25
+Config: THRESHOLD_SCORE=0.65, THRESHOLD_K=3, TOPK_K=2,
+        CHUNK_SIZE=1500, CHUNK_OVERLAP=100,
+        BM25_WEIGHT=0.25, VECTOR_WEIGHT=0.75
+═══════════════════════════════════════════════════════════
+
+
+                    ┌──────────────┐
+                    │  STARTUP     │
+                    └──────┬───────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │  argparse --reingest   │
+              │  If flag set:          │
+              │    wipe ./db/          │
+              │    rebuild from        │
+              │    scratch             │
+              └────────────┬───────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │  Vector Store Setup    │
+              │                        │
+              │  DB exists?            │
+              │  YES → load_vectorstore│
+              │       + load_chunks_   │
+              │         for_bm25()     │
+              │  NO  → ingest_data()   │
+              │       returns both     │
+              │       vector_db and    │
+              │       chunks           │
+              └────────────┬───────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │  ingest_data()         │
+              │                        │
+              │  1. DirectoryLoader    │
+              │     loads .pdf, .docx, │
+              │     .xlsx, .md, .txt   │
+              │                        │
+              │  2. make_splitter()    │
+              │     shared splitter    │
+              │     used by both       │
+              │     ingest and BM25    │
+              │     Separators:        │
+              │       \n---\n (entry)  │
+              │       \n## (heading)   │
+              │       \n\n (paragraph) │
+              │       \n               │
+              │       (space)          │
+              │                        │
+              │  3. Embed via Google   │
+              │     gemini-embedding   │
+              │     -001               │
+              │                        │
+              │  4. Store in Chroma    │
+              │     ./db/              │
+              └────────────┬───────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │  load_chunks_for_bm25()│
+              │                        │
+              │  Re-loads and splits   │
+              │  .md files to build    │
+              │  BM25 keyword index.   │
+              │  BM25 is not persisted │
+              │  — rebuilt in memory   │
+              │  on each startup.      │
+              └────────────┬───────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │  build_retriever()     │
+              │  build_rag_chain()     │
+              │  print_header()        │
+              └────────────┬───────────┘
+                           │
+                           ▼
+              ┌────────────────────────┐
+              │  CONVERSATION LOOP     │
+              │  Commands:             │
+              │    exit — quit app     │
+              │    audit — toggle      │
+              │      audit log on/off  │
+              │    clear — wipe        │
+              │      session memory    │
+              └────────────┬───────────┘
+                           │
+                           ▼
+                    User asks question
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 1: rewrite_query(query, session_id)
+═══════════════════════════════════════════════════════════
+Purpose: Resolve vague follow-up queries into standalone
+         search queries using the LLM.
+When:    Only fires when chat history exists.
+         First question always passes through unchanged.
+How:     Sends last 2 exchanges (4 messages max) from chat
+         history + current query to LLM with a rewrite prompt.
+         LLM produces a standalone query preserving all
+         technical terms, proper nouns, and domain-specific
+         names (e.g. ExternalTimeData, correctionScenario).
+Cost:    ~0.3-0.5s extra per query on Groq free tier.
+         Skipped entirely on first question (no history).
+
+Example:
+  History: "What does correctionScenario do in ExternalTimeData?"
+  Query:   "What happens if I don't set it during POST?"
+  Output:  "What happens if I don't set the correctionScenario
+            field in ExternalTimeData during a POST request?"
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 2: expand_query(query)
+═══════════════════════════════════════════════════════════
+Purpose: Resolve known SAP aliases to canonical terms
+         before retrieval. Ensures both BM25 and Vector
+         search on full names, not shorthand.
+How:     Regex word-boundary replacement (\b) with
+         re.IGNORECASE flag. Processes all aliases in a
+         single pass through the replacements dict.
+
+Aliases:
+  SCI, SCPI  → SAP Cloud Integration CPI
+  SF, SFSF   → SuccessFactors Employee Central
+  EC         → Employee Central SuccessFactors
+  S4         → S/4HANA S/4
+  ECP        → Employee Central Payroll
+  BIB        → Business Integration Builder replication
+  PTP        → Point-to-Point replication
+  SCC        → SAP Cloud Connector
+  "IS"       → removed — too short, matches common English
+
+Example:
+  Input:  "BIB replication data sent from CPI but S4
+           is not receiving it"
+  Output: "Business Integration Builder replication data
+           sent from CPI but S/4HANA S/4 is not receiving it"
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 3: Deduplication regex (inside expand_query)
+═══════════════════════════════════════════════════════════
+Purpose: Clean up repeated words caused by alias expansion.
+         When query already contains expanded term and alias
+         also expands to same word, duplicates appear.
+How:     re.sub(r'\b(\w+)\s+\1\b', r'\1', ...)
+         Collapses consecutive duplicate words into one.
+         Case-insensitive via re.IGNORECASE.
+
+Example:
+  Before: "Business Integration Builder replication replication"
+  After:  "Business Integration Builder replication"
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 4: HYBRID SEARCH (inside build_retriever)
+═══════════════════════════════════════════════════════════
+Two parallel search paths run on the expanded query.
+Results are merged by weighted score.
+
 ┌─────────────────────────────────────────────────────┐
-│              HYBRID SEARCH                          │
 │                                                     │
 │  BM25 (Keyword)          Vector (Semantic)          │
-│  Exact term matching     Meaning-based matching     │
-│  Great for SAP entity    Great for plain English    │
-│  names and TCodes        questions and concepts     │
+│  bm25_retriever          Chroma cosine similarity   │
+│  .invoke(bm25_query)     .similarity_search_with_   │
+│                           relevance_scores(query)   │
+│  Fetches THRESHOLD_K*2   Fetches k*2 candidates     │
+│  candidates for merging  for merging                │
 │                                                     │
-│  Returns ranked list     Returns scored list        │
-│  Rank normalised 0-1     Score already 0.0-1.0      │
+│  ┌──────────────────┐                               │
+│  │ strip_stopwords() │                              │
+│  │                    │                              │
+│  │ Applied to BM25    │                              │
+│  │ query ONLY.        │                              │
+│  │ Removes common     │                              │
+│  │ English filler     │                              │
+│  │ words so BM25      │                              │
+│  │ focuses on         │                              │
+│  │ meaningful terms.  │                              │
+│  │                    │                              │
+│  │ Stripped words:     │                              │
+│  │ do, you, have,     │                              │
+│  │ any, some, the,    │                              │
+│  │ a, an, is, are,    │                              │
+│  │ on, in, for, of,   │                              │
+│  │ to, my, your,      │                              │
+│  │ notes, about,      │                              │
+│  │ what, how, does,   │                              │
+│  │ can, could, would, │                              │
+│  │ should, it, its,   │                              │
+│  │ this, that, there, │                              │
+│  │ with, from, was,   │                              │
+│  │ were, been, being, │                              │
+│  │ has, had, did,     │                              │
+│  │ tell, me, know,    │                              │
+│  │ get, got, i, we    │                              │
+│  │                    │                              │
+│  │ Vector search gets │                              │
+│  │ the FULL query —   │                              │
+│  │ no stripping.      │                              │
+│  │                    │                              │
+│  │ Safety: if all     │                              │
+│  │ words stripped,     │                              │
+│  │ return original    │                              │
+│  │ query as fallback. │                              │
+│  └──────────────────┘                               │
 │                                                     │
-│  Combined Score = (BM25_WEIGHT x bm25_score)        │
-│                 + (VECTOR_WEIGHT x vector_score)    │
-│               = (0.3 x bm25) + (0.7 x vector)       │
+│  BM25 scoring:           Vector scoring:            │
+│  Rank-based normalised   Chroma returns 0.0-1.0     │
+│  Rank 0 (best) → 1.0    cosine similarity score    │
+│  Last rank → near 0.0   directly usable            │
+│                                                     │
+│  ── Merge ────────────────────────────────────────  │
+│  Unique docs collected from both sources.           │
+│  Deduplication by first 100 chars of page_content.  │
+│  If same chunk found in both BM25 and Vector,       │
+│  BM25 version kept (first seen wins).               │
+│                                                     │
+│  ── Weighted hybrid score per doc ────────────────  │
+│  combined = (BM25_WEIGHT x bm25_score)              │
+│           + (VECTOR_WEIGHT x vector_score)          │
+│         = (0.25 x bm25) + (0.75 x vector)          │
+│                                                     │
+│  All three scores attached to doc.metadata:         │
+│    relevance_score  (vector)                        │
+│    bm25_score       (normalised BM25)               │
+│    hybrid_score     (combined weighted)             │
+│  All visible in audit log.                          │
+│                                                     │
+│  Sorted by hybrid score descending.                 │
+│  Return top K candidates.                           │
 │                                                     │
 │  Example: EmpPayCompRecurring                       │
 │    bm25=1.000  vector=0.554                         │
-│    combined = (0.3x1.000) + (0.7x0.554) = 0.688     │
+│    combined = (0.25x1.000) + (0.75x0.554) = 0.666  │
 └─────────────────────────────────────────────────────┘
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 5: TWO-STAGE RETRIEVAL DECISION
+═══════════════════════════════════════════════════════════
+
+THRESHOLD_K=3 candidates evaluated by hybrid score
       │
-      ▼
-THRESHOLD_K=3
-Top 3 candidates evaluated by combined score
-      │
-      ├── Any chunk with combined score >= THRESHOLD_SCORE=0.65?
+      ├── Any chunk with hybrid score >= THRESHOLD_SCORE (0.65)?
       │
       YES ──────────────────────────────────────────┐
       │                                             │
@@ -39,9 +270,11 @@ Top 3 candidates evaluated by combined score
       │                                    STAGE 1: THRESHOLD
       ▼                                    All passing chunks sent to LLM
 STAGE 2: TOPK_FALLBACK                     (audit shows per chunk:
-Grab top TOPK_K=2                           vector x.xxx | bm25 x.xxx | hybrid x.xxx)
-regardless of score                                 │
-+ print warning                                     │
+Grab top TOPK_K=2                           vector x.xxx | bm25 x.xxx |
+regardless of score                         hybrid x.xxx)
++ print warning:                                    │
+"Low confidence match —                             │
+ answer may be approximate."                        │
       │                                             │
       ├── Still empty?                              │
       │                                             │
@@ -49,48 +282,201 @@ regardless of score                                 │
       │                                             │
       ▼                                             │
 CIRCUIT BREAKER                                     │
-No LLM call made                                    │
-Print fallback message                              │
+No LLM call made.                                   │
+Print fallback message:                             │
 "I do not have enough                               │
-information..."                                     │
+information in your Knowledge                       │
+Base to answer this."                               │
+Save query + fallback to                            │
+session history so memory                           │
+tracks it.                                          │
                                                     │
       ┌─────────────────────────────────────────────┘
       │
       ▼
-CHUNK CONTENTS SENT TO LLM
-LLM receives full text of all passing chunks
-Scores are never shown to the LLM
-      │
-      ├── 1 entry in chunk?
-      │         │
-      │         LLM reads entry
-      │         answers directly
-      │
-      └── 2+ entries in chunk?
-                │
-                Happens when two short related entries
-                merge below CHUNK_SIZE=1500 chars
-                e.g. "BIB What It Is" merges with
-                     "BIB Replication Failure" entry
-                     Audit preview shows first 120 chars only
-                     so the second entry is not visible in audit
-                │
-                LLM reads ALL entries in the chunk
-                matches each heading against the question
-                selects the relevant heading
-                answers only from that entry
-                ignores all other entries in the chunk
-                reports selected heading as Source Entry
-      │
-      ▼
-SYSTEM PROMPT RULES APPLIED
-* Strict grounding — no hallucination
-* If answer not in context → "I do not have enough information"
-* Alias resolution (second pass in LLM)
-* Formatting rules enforced
-* Output format: Source Entry / Answer / References /
-                 Consultant Insight / Suggested Next Step
+
+
+═══════════════════════════════════════════════════════════
+STEP 6: CONTEXT SIZE WARNING
+═══════════════════════════════════════════════════════════
+If context_chars > 4000:
+  Print warning — response may be slow on free tier.
+  Not a blocker — just informational.
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 7: LLM INFERENCE (build_rag_chain)
+═══════════════════════════════════════════════════════════
+
+format_docs():
+  Joins all retrieved chunks with --- separators.
+  Each chunk prefixed with [Source: filename].
+
+Chain structure:
+  context      ← format_docs(retrieved chunks)
+  question     ← user query
+  chat_history ← session memory via RunnableWithMessageHistory
       │
       ▼
-Final Answer printed to terminal
+  SYSTEM_PROMPT with {context} injected
+      │
+      ▼
+  get_llm() → Groq llama-3.3-70b-versatile
+               temperature=0
+               request_timeout=60s
+               max_retries=2
+      │
+      ▼
+  StrOutputParser → raw string response
+
+Session memory:
+  get_session_history(session_id)
+  Stores full conversation per session.
+  Cleared via 'clear' command.
+  Used by rewrite_query() for follow-ups.
+  Used by RunnableWithMessageHistory for
+  conversational continuity in LLM responses.
+
+How LLM handles chunks:
+  1 entry in chunk:
+    → LLM reads entry and answers directly.
+
+  2+ entries in chunk:
+    → Happens when short related entries merge
+      below CHUNK_SIZE=1500 chars.
+    → Audit preview shows first 120 chars only,
+      so second entry not visible in audit.
+    → LLM reads ALL entries in the chunk,
+      matches each heading against the question,
+      selects the relevant heading,
+      answers only from that entry,
+      ignores all other entries in the chunk,
+      reports selected heading as Source Entry.
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 8: SYSTEM PROMPT RULES
+═══════════════════════════════════════════════════════════
+
+PHASE 1 — KNOWLEDGE RETRIEVAL:
+  * Use entry headings to identify source
+  * Apply alias resolution (second pass in LLM):
+      SF, SFSF = Employee Central
+      CPI, SCI, SCPI, IS = SAP Integration Suite
+      BIB = Business Integration Builder Replication
+      PTP = Point-to-Point Replication
+      SCC = SAP Cloud Connector
+  * Conflicts → more specific entry wins
+
+PHASE 2 — STRICT GROUNDING:
+  * No general SAP training knowledge for technical answers
+  * No hallucinated TCodes, fields, entities, or steps
+  * No answer → output ONLY the fallback line:
+    "I do not have enough information in your
+     Knowledge Base to answer this."
+    No Source Entry, no Consultant Insight,
+    no Suggested Next Step, no additional commentary.
+
+PHASE 3 — RESPONSE RULES:
+  * Clean Markdown, backticks for technical terms
+  * No hyphens in prose, no emojis in code
+  * References only from same Source Entry heading
+    (do not pull from adjacent entries in chunk)
+
+OUTPUT FORMAT:
+  * Source Entry
+  * Answer
+  * References (omit if none)
+  * Consultant Insight
+  * Suggested Next Step
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 9: POST-PROCESSING GUARD
+═══════════════════════════════════════════════════════════
+Applied after LLM response, before printing.
+Defensive safety net — catches LLM non-compliance.
+
+Check 1 — Exact fallback phrase detected:
+  "I do not have enough information in your
+   Knowledge Base to answer this."
+  → Strip EVERYTHING else from response.
+    Output ONLY the fallback line.
+    Prevents LLM from adding Consultant Insight
+    or Suggested Next Step after admitting no answer.
+
+Check 2 — Hedge patterns detected:
+  * "does not explicitly mention"
+  * "does not contain information"
+  * "no direct mention"
+  * "not explicitly covered"
+  → Force clean fallback response.
+    Catches cases where LLM recognises the context
+    is wrong but still tries to answer from it
+    instead of using the exact fallback phrase.
+
+Neither detected:
+  → Response passes through unchanged.
+                           │
+                           ▼
+
+
+═══════════════════════════════════════════════════════════
+STEP 10: OUTPUT
+═══════════════════════════════════════════════════════════
+
+Final answer printed to terminal.
 + [TIMING] Response generated in Xs
+
+Audit log (if enabled via 'audit' command):
+  Per chunk:
+    source file | page | vector score | bm25 score |
+    hybrid score | ← winner marker
+    First 120 chars preview of chunk content
+  Footer:
+    [WEIGHTS] vector=X | bm25=X | threshold=X
+  Pauses for Enter before continuing.
+
+
+═══════════════════════════════════════════════════════════
+FUNCTION REFERENCE
+═══════════════════════════════════════════════════════════
+
+STARTUP AND CONFIG:
+  main()                 → Startup, argparse, conversation loop, post-processing guard.
+
+LLM:
+  get_llm()              → LLM factory. Returns Groq or Gemini based on SELECTED_LLM.
+
+UI:
+  print_header()         → Startup banner: status, model, memory, search weights.
+  print_audit_log()      → Chunk-level retrieval diagnostics with all three scores.
+
+DATA INGESTION:
+  make_splitter()        → Shared RecursiveCharacterTextSplitter for ingest and BM25.
+  ingest_data()          → Load, split, embed, store. Returns (vector_db, chunks).
+  load_vectorstore()     → Load existing Chroma DB from disk.
+  load_chunks_for_bm25() → Re-split docs for BM25 index (rebuilt in memory on startup).
+
+MEMORY:
+  get_session_history()  → Session memory store. One ChatMessageHistory per session_id.
+
+QUERY PROCESSING:
+  rewrite_query()        → LLM-powered follow-up query rewriter. Preserves technical terms.
+  expand_query()         → SAP alias resolution via regex + deduplication of repeated words.
+  strip_stopwords()      → Remove filler words from BM25 query only. Vector gets full query.
+
+RETRIEVAL:
+  build_retriever()      → Hybrid two-stage retriever factory.
+    hybrid_search()      → Merge BM25 + Vector by weighted score. Returns scored list.
+    retrieve()           → Stage 1 threshold → Stage 2 fallback → circuit breaker.
+
+RAG CHAIN:
+  build_rag_chain()      → RAG chain with session memory via RunnableWithMessageHistory.
+    format_docs()        → Join chunks with --- separators and [Source: ...] labels.
