@@ -295,6 +295,61 @@ def strip_stopwords(text: str) -> str:
     return " ".join(words) if words else text  # fallback to original if everything got stripped
 
 
+
+def rewrite_query(query: str, session_id: str) -> str:
+    """
+    Use the LLM to rewrite vague follow-up queries into standalone search queries.
+    Pulls chat history to resolve pronouns and implicit references.
+    Only fires when chat history exists — first question is always standalone.
+    """
+    history = get_session_history(session_id)
+    if not history.messages:
+        return query
+
+    llm = get_llm()
+
+    # Build a slim history string — last 2 exchanges max to keep it cheap
+    recent = history.messages[-4:]  # last 2 user + 2 assistant messages
+    history_text = "\n".join(
+        f"{'User' if m.type == 'human' else 'Assistant'}: {m.content[:300]}"
+        for m in recent
+    )
+
+    rewrite_prompt = ChatPromptTemplate.from_messages([
+        ("system",
+         "You are a search query rewriter. Given the conversation history and the latest user query, "
+         "rewrite the query into a standalone search query that contains all necessary context. "
+         "Rules:\n"
+         "1. If the query is already standalone and specific, return it unchanged.\n"
+         "2. If the query references previous conversation (pronouns like it/that/this, or implicit context), "
+         "rewrite it to include the specific terms from the conversation.\n"
+         "3. Never drop terms that carry specific meaning such as technical terms, proper nouns, "
+         "or domain-specific names (e.g. ExternalTimeData, correctionScenario, BIB). "
+         "Always keep them in the rewritten query.\n"
+         "4. Output ONLY the rewritten query, nothing else."),
+        ("human",
+         "Conversation history:\n{history}\n\nLatest query: {query}\n\nRewritten query:"),
+    ])
+
+    chain = rewrite_prompt | llm | StrOutputParser()
+    rewritten = chain.invoke({"history": history_text, "query": query}).strip()
+
+    # Remove quotes if the LLM wraps the output
+    rewritten = rewritten.strip('"').strip("'")
+
+    if rewritten.lower() != query.lower():
+        print(f"[REWRITE] '{query}' → '{rewritten}'")
+
+    return rewritten
+
+
+
+
+
+
+
+
+
 def build_retriever(vector_db: Chroma, all_chunks: list):
     """
     Manual hybrid two-stage retriever — no external ensemble dependency.
@@ -544,6 +599,7 @@ def main():
                 continue
 
             # ── Retrieval ────────────────────────────────────
+            query = rewrite_query(query, SESSION_ID)
             docs, stage = retriever(query)
 
             context_chars = sum(len(d.page_content) for d in docs)
